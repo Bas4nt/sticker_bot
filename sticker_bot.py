@@ -1,5 +1,4 @@
-"""
-# requirements.txt:
+# Requirements and dependencies for the Telegram Sticker Bot
 # python-telegram-bot==20.7
 # Pillow==10.1.0
 # moviepy==1.0.3
@@ -240,8 +239,7 @@ class StickerBot:
             del user_states[user_id]
 
     async def generate_meme(self, update: Update, context: ContextTypes.DEFAULT_TYPE, photo_id: str, top_text: str, bottom_text: str):
-        """Generate meme from image and texts"""
-        # Download the photo
+        # Generate meme from image and texts
         photo_file = await context.bot.get_file(photo_id)
         photo_bytes = await photo_file.download_as_bytearray()
         
@@ -251,12 +249,15 @@ class StickerBot:
             
             draw = ImageDraw.Draw(img)
             
-            # Calculate font size
-            font_size = int(img.width * 0.1)
+            # Calculate font size based on image size
+            font_size = int(img.width * 0.15)  # Larger font for memes
             try:
                 font = ImageFont.truetype("impact.ttf", font_size)
             except:
-                font = ImageFont.load_default()
+                try:
+                    font = ImageFont.truetype("arial.ttf", font_size)
+                except:
+                    font = ImageFont.load_default()
 
             # Add top text
             top_text = top_text.upper()
@@ -268,7 +269,7 @@ class StickerBot:
             # Draw outline
             outline_color = 'black'
             text_color = 'white'
-            outline_width = 2
+            outline_width = 3
             
             for adj in range(-outline_width, outline_width+1):
                 for adj2 in range(-outline_width, outline_width+1):
@@ -300,7 +301,7 @@ class StickerBot:
             )
 
     async def gif_to_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Convert GIF to animated sticker"""
+        # Convert GIF to animated sticker
         if not update.message.reply_to_message or not (
             update.message.reply_to_message.animation or 
             update.message.reply_to_message.video
@@ -420,7 +421,7 @@ class StickerBot:
             await update.message.reply_text(f"Error: {str(e)}")
 
     async def quote_to_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Convert text message to styled text sticker"""
+        # Convert text message to styled text sticker
         if not update.message.reply_to_message or not update.message.reply_to_message.text:
             await update.message.reply_text("Please reply to a text message with /quote2sticker")
             return
@@ -428,7 +429,6 @@ class StickerBot:
         text = update.message.reply_to_message.text
         
         # Create image with text
-        # Calculate image size based on text length
         font_size = 40
         try:
             font = ImageFont.truetype("arial.ttf", font_size)
