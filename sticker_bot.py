@@ -709,11 +709,11 @@ def main():
     
     # Add message handlers for direct interactions
     application.add_handler(MessageHandler(
-        filters.PHOTO | 
-        filters.Sticker.ALL | 
-        filters.Document.ALL | 
-        filters.VIDEO | 
-        filters.Animation,
+        (filters.PHOTO | 
+         filters.Sticker.ALL | 
+         filters.Document.ALL | 
+         filters.VIDEO | 
+         filters.Document.ANIMATION),
         bot.handle_media
     ))
     
