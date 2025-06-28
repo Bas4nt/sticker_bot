@@ -988,7 +988,7 @@ class StickerBot:
                     filters.Document.IMAGE |
                     filters.Document.VIDEO |
                     filters.VIDEO |
-                    filters.Document.ANIMATION
+                    filters.ANIMATION
                 ),
                 self.handle_media
             ))
