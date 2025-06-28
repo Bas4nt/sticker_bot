@@ -51,7 +51,7 @@ PORT = int(os.getenv('PORT', 8080))
 app = FastAPI()
 
 @app.get("/")
-async def health_check():
+def health_check():
     return {"status": "healthy"}
 
 # Global variables for user states and temporary data
@@ -60,14 +60,14 @@ temp_files: List[str] = []
 
 class StickerBot:
     def __init__(self):
-        """Initialize the bot with necessary configurations"""
+        # Initialize bot configurations
         self.supported_image_types = {'image/jpeg', 'image/png', 'image/webp'}
         self.supported_animation_types = {'video/mp4', 'image/gif'}
         self.max_sticker_size = (512, 512)
         self.max_file_size = 50 * 1024 * 1024  # 50MB limit
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle the /start command"""
+        # Handle the /start command
         welcome_message = (
             "Welcome to the Advanced Sticker Maker Bot!\n\n"
             "Here's what I can do for you:\n\n"
@@ -85,7 +85,7 @@ class StickerBot:
         await update.message.reply_text(welcome_message)
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle the /help command"""
+        # Handle the /help command
         help_text = (
             "Detailed Usage Instructions:\n\n"
             "Image to Sticker:\n"
@@ -116,7 +116,7 @@ class StickerBot:
         await update.message.reply_text(help_text)
 
     async def stickerify(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Convert image to sticker format"""
+        # Convert image to sticker format
         if not update.message.reply_to_message or not update.message.reply_to_message.photo:
             await update.message.reply_text("Please reply to an image with /stickerify")
             return
@@ -129,19 +129,15 @@ class StickerBot:
         
         # Process image
         with Image.open(BytesIO(photo_bytes)) as img:
-            # Convert to RGBA
             if img.mode != 'RGBA':
                 img = img.convert('RGBA')
             
-            # Resize maintaining aspect ratio
             img.thumbnail(self.max_sticker_size)
             
-            # Save as WebP
             output = BytesIO()
             img.save(output, format='WebP')
             output.seek(0)
             
-            # Send as document to preserve as sticker
             await update.message.reply_document(
                 document=output,
                 filename='sticker.webp',
@@ -149,7 +145,7 @@ class StickerBot:
             )
 
     async def add_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Add text to image with customization options"""
+        # Add text to image with customization options
         if not context.args:
             await update.message.reply_text("Please provide the text after /addtext")
             return
@@ -170,17 +166,14 @@ class StickerBot:
             if img.mode != 'RGBA':
                 img = img.convert('RGBA')
             
-            # Create draw object
             draw = ImageDraw.Draw(img)
             
-            # Calculate font size based on image size
             font_size = int(img.width * 0.1)
             try:
                 font = ImageFont.truetype("arial.ttf", font_size)
             except:
                 font = ImageFont.load_default()
 
-            # Calculate text position (centered)
             text_bbox = draw.textbbox((0, 0), text, font=font)
             text_width = text_bbox[2] - text_bbox[0]
             text_height = text_bbox[3] - text_bbox[1]
@@ -188,20 +181,16 @@ class StickerBot:
             x = (img.width - text_width) // 2
             y = (img.height - text_height) // 2
             
-            # Add text with outline
             outline_color = 'black'
             text_color = 'white'
             outline_width = 2
             
-            # Draw outline
             for adj in range(-outline_width, outline_width+1):
                 for adj2 in range(-outline_width, outline_width+1):
                     draw.text((x+adj, y+adj2), text, font=font, fill=outline_color)
             
-            # Draw main text
             draw.text((x, y), text, font=font, fill=text_color)
             
-            # Save as WebP
             output = BytesIO()
             img.save(output, format='WebP')
             output.seek(0)
@@ -213,8 +202,7 @@ class StickerBot:
             )
 
     async def create_meme(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Create a meme with top and bottom text"""
-        # Store user state
+        # Create a meme with top and bottom text
         user_id = update.effective_user.id
         user_states[user_id] = {
             'waiting_for': 'top_text',
@@ -224,7 +212,7 @@ class StickerBot:
         await update.message.reply_text("Please send the image you want to make into a meme.")
 
     async def handle_meme_state(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle meme creation state machine"""
+        # Handle meme creation state machine
         user_id = update.effective_user.id
         state = user_states.get(user_id, {})
         
@@ -484,7 +472,7 @@ class StickerBot:
         )
 
     async def kang_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Save someone else's sticker to own pack"""
+        # Save sticker to user's pack
         if not update.message.reply_to_message or not update.message.reply_to_message.sticker:
             await update.message.reply_text("Please reply to a sticker with /kang")
             return
@@ -492,16 +480,10 @@ class StickerBot:
         sticker = update.message.reply_to_message.sticker
         user = update.effective_user
         
-        # Download sticker
-        sticker_file = await context.bot.get_file(sticker.file_id)
-        sticker_bytes = await sticker_file.download_as_bytearray()
-        
-        # Get user's sticker packs or create new one
         try:
             user_packs = await context.bot.get_user_sticker_sets(user.id)
             
             if not user_packs:
-                # Create new pack
                 pack_name = f"kang_pack_{user.id}_by_{context.bot.username}"
                 await context.bot.create_new_sticker_set(
                     user.id,
@@ -512,13 +494,15 @@ class StickerBot:
                 )
                 user_packs = [pack_name]
             
-            # Add to first pack
             pack = user_packs[0]
+            sticker_file = await context.bot.get_file(sticker.file_id)
+            sticker_bytes = await sticker_file.download_as_bytearray()
+            
             await context.bot.add_sticker_to_set(
                 user.id,
                 pack.name,
                 sticker_bytes,
-                '-'  # Changed from emoji to plain text
+                '-'
             )
             
             await update.message.reply_text(
@@ -529,19 +513,18 @@ class StickerBot:
             await update.message.reply_text(f"Failed to add sticker: {str(e)}")
 
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle errors"""
+        # Handle errors
         logger.error(f"Update {update} caused error {context.error}")
         await update.message.reply_text(
             "Sorry, an error occurred. Please try again later."
         )
 
 def run_health_check_server():
-    """Run the FastAPI server for health checks"""
+    # Run the FastAPI server for health checks
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 
 def main():
-    """Start the bot and health check server"""
-    # Start health check server in a separate thread
+    # Start the bot and health check server
     health_check_thread = threading.Thread(target=run_health_check_server)
     health_check_thread.daemon = True
     health_check_thread.start()
