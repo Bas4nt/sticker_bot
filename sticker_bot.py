@@ -56,7 +56,7 @@ class StickerBot:
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /start command"""
         welcome_message = """
-🎨 Welcome to the Advanced Sticker Maker Bot! 🎨
+Welcome to the Advanced Sticker Maker Bot!
 
 Here's what I can do for you:
 
@@ -70,45 +70,45 @@ Here's what I can do for you:
 /quote2sticker - Convert text to styled sticker
 /help - Show detailed instructions
 
-Send me any image, GIF, or video to get started! 🚀
+Send me any image, GIF, or video to get started!
 """
         await update.message.reply_text(welcome_message)
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /help command"""
         help_text = """
-📖 Detailed Usage Instructions:
+Detailed Usage Instructions:
 
-🖼 Image to Sticker:
+Image to Sticker:
 1. Send any image
 2. Use /stickerify to convert it
 3. Choose your pack to add it
 
-✍️ Adding Text:
+Adding Text:
 1. Send an image
 2. Use /addtext followed by your text
 3. Choose position and style
 
-🎭 Creating Memes:
+Creating Memes:
 1. Send an image
 2. Use /meme
 3. Send top text
 4. Send bottom text
 
-🎬 GIF to Sticker:
+GIF to Sticker:
 1. Send a GIF/short video
 2. Use /gif2sticker
 3. Wait for conversion
 
-📦 Sticker Pack Management:
+Sticker Pack Management:
 - /createstickerpack - Create new pack
 - /addsticker - Add to existing pack
 - /kang - Save others' stickers
 
-💭 Text to Sticker:
+Text to Sticker:
 - /quote2sticker - Reply to any message
 
-Need more help? Feel free to ask! 😊
+Need more help? Feel free to ask!
 """
         await update.message.reply_text(help_text)
 
@@ -358,8 +358,6 @@ Need more help? Feel free to ask! 😊
 
     async def create_sticker_pack(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Create a new sticker pack"""
-        user = update.effective_user
-        
         if not context.args:
             await update.message.reply_text(
                 "Please provide a name for your sticker pack:\n"
@@ -367,11 +365,11 @@ Need more help? Feel free to ask! 😊
             )
             return
         
+        user = update.effective_user
         pack_name = f"{context.args[0]}_{user.id}_by_{context.bot.username}"
         pack_title = ' '.join(context.args)
         
         try:
-            # Create pack with a placeholder sticker
             await context.bot.create_new_sticker_set(
                 user.id,
                 pack_name,
@@ -505,7 +503,7 @@ Need more help? Feel free to ask! 😊
                 await context.bot.create_new_sticker_set(
                     user.id,
                     pack_name,
-                    f"{user.first_name}'s Kanged Stickers",
+                    f"{user.first_name}'s Sticker Pack",
                     stickers=[],
                     sticker_format='static' if not sticker.is_animated else 'animated'
                 )
@@ -517,15 +515,15 @@ Need more help? Feel free to ask! 😊
                 user.id,
                 pack.name,
                 sticker_bytes,
-                '👍'
+                '-'  # Changed from emoji to plain text
             )
             
             await update.message.reply_text(
-                f"Sticker successfully kanged to pack: {pack.title}"
+                f"Sticker successfully added to pack: {pack.title}"
             )
             
         except Exception as e:
-            await update.message.reply_text(f"Failed to kang sticker: {str(e)}")
+            await update.message.reply_text(f"Failed to add sticker: {str(e)}")
 
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle errors"""
