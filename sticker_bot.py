@@ -64,6 +64,7 @@ class StickerBot:
         self.supported_animation_types = {'video/mp4', 'image/gif'}
         self.max_sticker_size = (512, 512)
         self.max_file_size = 50 * 1024 * 1024  # 50MB limit
+        self.user_states = {}
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Handle the /start command
@@ -116,12 +117,20 @@ class StickerBot:
 
     async def stickerify(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Convert image to sticker format
-        if not update.message.reply_to_message or not update.message.reply_to_message.photo:
-            await update.message.reply_text("Please reply to an image with /stickerify")
+        message = update.message
+        
+        # Check if it's a reply or direct image
+        if message.photo:
+            photo = message.photo[-1]
+        elif message.reply_to_message and message.reply_to_message.photo:
+            photo = message.reply_to_message.photo[-1]
+        else:
+            await message.reply_text(
+                "Please send an image or reply to an image with /stickerify\n"
+                "You can also just send any image directly and I'll convert it to a sticker!"
+            )
             return
 
-        photo = update.message.reply_to_message.photo[-1]
-        
         # Download the photo
         photo_file = await context.bot.get_file(photo.file_id)
         photo_bytes = await photo_file.download_as_bytearray()
@@ -137,7 +146,7 @@ class StickerBot:
             img.save(output, format='WebP')
             output.seek(0)
             
-            await update.message.reply_document(
+            await message.reply_document(
                 document=output,
                 filename='sticker.webp',
                 caption="Here's your sticker! Use /addsticker to add it to a pack."
@@ -145,22 +154,34 @@ class StickerBot:
 
     async def add_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Add text to image with customization options
+        message = update.message
+        
         if not context.args:
-            await update.message.reply_text("Please provide the text after /addtext")
+            await message.reply_text(
+                "Please use this format:\n"
+                "1. Send an image\n"
+                "2. Send: /addtext Your Text Here"
+            )
             return
             
-        if not update.message.reply_to_message or not update.message.reply_to_message.photo:
-            await update.message.reply_text("Please reply to an image with /addtext")
+        # Check if it's a reply or direct image
+        if message.photo:
+            photo = message.photo[-1]
+        elif message.reply_to_message and message.reply_to_message.photo:
+            photo = message.reply_to_message.photo[-1]
+        else:
+            await message.reply_text(
+                "Please send an image with /addtext Your Text\n"
+                "Or reply to an image with /addtext Your Text"
+            )
             return
 
         text = ' '.join(context.args)
-        photo = update.message.reply_to_message.photo[-1]
         
-        # Download the photo
+        # Process image
         photo_file = await context.bot.get_file(photo.file_id)
         photo_bytes = await photo_file.download_as_bytearray()
         
-        # Process image
         with Image.open(BytesIO(photo_bytes)) as img:
             if img.mode != 'RGBA':
                 img = img.convert('RGBA')
@@ -194,10 +215,29 @@ class StickerBot:
             img.save(output, format='WebP')
             output.seek(0)
             
-            await update.message.reply_document(
+            await message.reply_document(
                 document=output,
                 filename='text_sticker.webp',
                 caption="Here's your sticker with text!"
+            )
+
+    async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # Automatically convert photos to stickers
+        await self.stickerify(update, context)
+
+    async def handle_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # Handle incoming stickers
+        message = update.message
+        if message.sticker:
+            # Save the sticker information in user state
+            user_id = message.from_user.id
+            self.user_states[user_id] = {
+                'last_sticker': message.sticker
+            }
+            await message.reply_text(
+                "Nice sticker! You can:\n"
+                "1. Use /kang to add it to your pack\n"
+                "2. Use /createstickerpack to create a new pack"
             )
 
     async def create_meme(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -473,22 +513,32 @@ class StickerBot:
 
     async def kang_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Save sticker to user's pack
-        if not update.message.reply_to_message or not update.message.reply_to_message.sticker:
-            await update.message.reply_text("Please reply to a sticker with /kang")
+        message = update.message
+        user_id = message.from_user.id
+        
+        # Check if it's a reply to a sticker or using last seen sticker
+        if message.reply_to_message and message.reply_to_message.sticker:
+            sticker = message.reply_to_message.sticker
+        elif user_id in self.user_states and 'last_sticker' in self.user_states[user_id]:
+            sticker = self.user_states[user_id]['last_sticker']
+        else:
+            await message.reply_text(
+                "Please either:\n"
+                "1. Reply to a sticker with /kang\n"
+                "2. Send a sticker first, then use /kang"
+            )
             return
         
-        sticker = update.message.reply_to_message.sticker
-        user = update.effective_user
-        
         try:
-            user_packs = await context.bot.get_user_sticker_sets(user.id)
+            user_packs = await context.bot.get_user_sticker_sets(user_id)
             
             if not user_packs:
-                pack_name = f"kang_pack_{user.id}_by_{context.bot.username}"
+                # Create new pack
+                pack_name = f"pack_{user_id}_by_{context.bot.username}"
                 await context.bot.create_new_sticker_set(
-                    user.id,
+                    user_id,
                     pack_name,
-                    f"{user.first_name}'s Sticker Pack",
+                    f"{message.from_user.first_name}'s Sticker Pack",
                     stickers=[],
                     sticker_format='static' if not sticker.is_animated else 'animated'
                 )
@@ -499,18 +549,19 @@ class StickerBot:
             sticker_bytes = await sticker_file.download_as_bytearray()
             
             await context.bot.add_sticker_to_set(
-                user.id,
+                user_id,
                 pack.name,
                 sticker_bytes,
                 '-'
             )
             
-            await update.message.reply_text(
-                f"Sticker successfully added to pack: {pack.title}"
+            await message.reply_text(
+                f"Sticker successfully added to your pack!\n"
+                f"Use /addsticker to add more stickers."
             )
             
         except Exception as e:
-            await update.message.reply_text(f"Failed to add sticker: {str(e)}")
+            await message.reply_text(f"Failed to add sticker: {str(e)}")
 
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Handle errors
@@ -533,7 +584,7 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
     bot = StickerBot()
     
-    # Add handlers
+    # Add command handlers
     application.add_handler(CommandHandler('start', bot.start_command))
     application.add_handler(CommandHandler('help', bot.help_command))
     application.add_handler(CommandHandler('stickerify', bot.stickerify))
@@ -544,6 +595,10 @@ def main():
     application.add_handler(CommandHandler('addsticker', bot.add_sticker))
     application.add_handler(CommandHandler('quote2sticker', bot.quote_to_sticker))
     application.add_handler(CommandHandler('kang', bot.kang_sticker))
+    
+    # Add message handlers for direct interactions
+    application.add_handler(MessageHandler(filters.PHOTO, bot.handle_photo))
+    application.add_handler(MessageHandler(filters.Sticker.ALL, bot.handle_sticker))
     
     # Add error handler
     application.add_error_handler(bot.error_handler)
