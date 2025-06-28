@@ -566,10 +566,10 @@ class StickerBot:
                 # Success message
                 await processing_msg.edit_text(
                     f"✅ *Sticker successfully added!*\n\n"
-                    f"📦 *Pack:* {pack_info.title}\n"
+                    f"📦 *Pack:* `{pack_info.title}`\n"
                     f"🔢 *Stickers in pack:* {sticker_count}/{self.max_stickers_per_pack}\n"
                     f"🎯 *Slots left:* {slots_left}\n\n"
-                    f"Click below to view your pack:",
+                    "Click below to view your pack:",
                     parse_mode='Markdown',
                     reply_markup=reply_markup
                 )
