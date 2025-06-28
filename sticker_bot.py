@@ -708,14 +708,15 @@ def main():
     application.add_handler(CommandHandler('kang', bot.kang_sticker))
     
     # Add message handlers for direct interactions
-    application.add_handler(MessageHandler(
-        (filters.PHOTO | 
-         filters.Sticker.ALL | 
-         filters.Document.ALL | 
-         filters.VIDEO | 
-         filters.Document.ANIMATION),
-        bot.handle_media
-    ))
+    # Handle all types of media that can be converted to stickers
+    media_filter = (
+        filters.PHOTO |  # Photos
+        filters.Sticker.ALL |  # All types of stickers
+        filters.Document.MimeType("image/gif") |  # GIF files
+        filters.Document.MimeType("video/mp4") |  # MP4 files
+        filters.VIDEO  # Videos
+    )
+    application.add_handler(MessageHandler(media_filter, bot.handle_media))
     
     # Add error handler
     application.add_error_handler(bot.error_handler)
