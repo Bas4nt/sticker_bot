@@ -68,61 +68,51 @@ class StickerBot:
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /start command"""
-        welcome_message = """
-Welcome to the Advanced Sticker Maker Bot!
-
-Here's what I can do for you:
-
-/stickerify - Convert any image to a Telegram sticker
-/addtext - Add custom text to your image
-/meme - Create a meme with top/bottom text
-/gif2sticker - Convert GIF to animated sticker
-/kang - Save any sticker to your pack
-/createstickerpack - Create a new sticker pack
-/addsticker - Add sticker to existing pack
-/quote2sticker - Convert text to styled sticker
-/help - Show detailed instructions
-
-Send me any image, GIF, or video to get started!
-"""
+        welcome_message = (
+            "Welcome to the Advanced Sticker Maker Bot!\n\n"
+            "Here's what I can do for you:\n\n"
+            "/stickerify - Convert any image to a Telegram sticker\n"
+            "/addtext - Add custom text to your image\n"
+            "/meme - Create a meme with top/bottom text\n"
+            "/gif2sticker - Convert GIF to animated sticker\n"
+            "/kang - Save any sticker to your pack\n"
+            "/createstickerpack - Create a new sticker pack\n"
+            "/addsticker - Add sticker to existing pack\n"
+            "/quote2sticker - Convert text to styled sticker\n"
+            "/help - Show detailed instructions\n\n"
+            "Send me any image, GIF, or video to get started!"
+        )
         await update.message.reply_text(welcome_message)
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /help command"""
-        help_text = """
-Detailed Usage Instructions:
-
-Image to Sticker:
-1. Send any image
-2. Use /stickerify to convert it
-3. Choose your pack to add it
-
-Adding Text:
-1. Send an image
-2. Use /addtext followed by your text
-3. Choose position and style
-
-Creating Memes:
-1. Send an image
-2. Use /meme
-3. Send top text
-4. Send bottom text
-
-GIF to Sticker:
-1. Send a GIF/short video
-2. Use /gif2sticker
-3. Wait for conversion
-
-Sticker Pack Management:
-- /createstickerpack - Create new pack
-- /addsticker - Add to existing pack
-- /kang - Save others' stickers
-
-Text to Sticker:
-- /quote2sticker - Reply to any message
-
-Need more help? Feel free to ask!
-"""
+        help_text = (
+            "Detailed Usage Instructions:\n\n"
+            "Image to Sticker:\n"
+            "1. Send any image\n"
+            "2. Use /stickerify to convert it\n"
+            "3. Choose your pack to add it\n\n"
+            "Adding Text:\n"
+            "1. Send an image\n"
+            "2. Use /addtext followed by your text\n"
+            "3. Choose position and style\n\n"
+            "Creating Memes:\n"
+            "1. Send an image\n"
+            "2. Use /meme\n"
+            "3. Send top text\n"
+            "4. Send bottom text\n\n"
+            "GIF to Sticker:\n"
+            "1. Send a GIF/short video\n"
+            "2. Use /gif2sticker\n"
+            "3. Wait for conversion\n\n"
+            "Sticker Pack Management:\n"
+            "- /createstickerpack - Create new pack\n"
+            "- /addsticker - Add to existing pack\n"
+            "- /kang - Save others' stickers\n\n"
+            "Text to Sticker:\n"
+            "- /quote2sticker - Reply to any message\n\n"
+            "Need more help? Feel free to ask!"
+        )
         await update.message.reply_text(help_text)
 
     async def stickerify(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
