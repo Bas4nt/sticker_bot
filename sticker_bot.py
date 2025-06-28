@@ -1,742 +1,437 @@
-# Requirements and dependencies for the Telegram Sticker Bot
-# python-telegram-bot==20.7
-# Pillow==10.1.0
-# moviepy==1.0.3
-# python-dotenv==1.0.0
-# fastapi==0.104.1
-# uvicorn==0.24.0
+#!/usr/bin/env python3
+"""
+Telegram Sticker Bot
+A professional bot for creating and managing Telegram stickers.
+"""
 
 import os
-import tempfile
+import sys
 import logging
-from typing import Dict, List
-from datetime import datetime
-import asyncio
-from io import BytesIO
 import textwrap
-import threading
-import uvicorn
-from fastapi import FastAPI
+from io import BytesIO
+from typing import Optional, Dict, Any, Union, List
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 
-# Environment and Telegram imports
+# Third-party imports
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
+from telegram import Update, Message, Bot
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
+from telegram.error import TelegramError, BadRequest
+import uvicorn
+from fastapi import FastAPI, Response, HTTPException
+from fastapi.responses import JSONResponse
 
-# Image processing imports
-from PIL import Image, ImageDraw, ImageFont
-from moviepy.editor import VideoFileClip
-
-# Configure logging
+# Configure logging with more detail
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
+    level=logging.INFO,
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('sticker_bot.log')
+    ]
 )
 logger = logging.getLogger(__name__)
 
-# Load environment variables
+# Load and validate environment variables
 load_dotenv()
-BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
-PORT = int(os.getenv('PORT', 8080))
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+PORT = int(os.getenv('PORT', '8080'))
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable is not set!")
 
-# Create FastAPI app for health checks
-app = FastAPI()
+# FastAPI app for health checks
+app = FastAPI(title="Sticker Bot API", version="1.0.0")
 
-@app.get("/")
-def health_check():
-    return {"status": "healthy"}
+@app.get("/health")
+async def health_check() -> JSONResponse:
+    """Health check endpoint for monitoring."""
+    try:
+        # Create a temporary bot instance to check Telegram API connectivity
+        bot = Bot(BOT_TOKEN)
+        me = await bot.get_me()
+        await bot.close()
+        
+        return JSONResponse(
+            content={
+                "status": "healthy",
+                "timestamp": datetime.utcnow().isoformat(),
+                "bot_username": me.username
+            },
+            status_code=200
+        )
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}", exc_info=True)
+        return JSONResponse(
+            content={
+                "status": "unhealthy",
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            },
+            status_code=503
+        )
 
-# Global variables for user states and temporary data
-user_states: Dict[int, dict] = {}
-temp_files: List[str] = []
+@dataclass
+class MediaInfo:
+    """Data class for storing media information."""
+    type: str
+    file_id: str
+    is_animated: bool = False
+    is_video: bool = False
+    mime_type: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    file_size: Optional[int] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert MediaInfo to dictionary."""
+        return {k: v for k, v in self.__dict__.items() if v is not None}
 
 class StickerBot:
+    """Professional Telegram Sticker Bot implementation."""
+    
     def __init__(self):
-        # Initialize bot configurations
+        """Initialize the StickerBot with configuration and state management."""
+        # Media configurations
         self.supported_image_types = {'image/jpeg', 'image/png', 'image/webp'}
         self.supported_animation_types = {'video/mp4', 'image/gif', 'application/x-tgsticker'}
         self.max_sticker_size = (512, 512)
         self.max_file_size = 50 * 1024 * 1024  # 50MB limit
-        self.user_states = {}
-
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Handle the /start command
-        welcome_message = (
-            "Welcome to the Advanced Sticker Maker Bot!\n\n"
-            "Here's what I can do for you:\n\n"
-            "/stickerify - Convert any image to a Telegram sticker\n"
-            "/addtext - Add custom text to your image\n"
-            "/meme - Create a meme with top/bottom text\n"
-            "/gif2sticker - Convert GIF to animated sticker\n"
-            "/kang - Save any sticker to your pack\n"
-            "/createstickerpack - Create a new sticker pack\n"
-            "/addsticker - Add sticker to existing pack\n"
-            "/quote2sticker - Convert text to styled sticker\n"
-            "/help - Show detailed instructions\n\n"
-            "Send me any image, GIF, or video to get started!"
-        )
-        await update.message.reply_text(welcome_message)
-
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Handle the /help command
-        help_text = (
-            "Detailed Usage Instructions:\n\n"
-            "Image to Sticker:\n"
-            "1. Send any image\n"
-            "2. Use /stickerify to convert it\n"
-            "3. Choose your pack to add it\n\n"
-            "Adding Text:\n"
-            "1. Send an image\n"
-            "2. Use /addtext followed by your text\n"
-            "3. Choose position and style\n\n"
-            "Creating Memes:\n"
-            "1. Send an image\n"
-            "2. Use /meme\n"
-            "3. Send top text\n"
-            "4. Send bottom text\n\n"
-            "GIF to Sticker:\n"
-            "1. Send a GIF/short video\n"
-            "2. Use /gif2sticker\n"
-            "3. Wait for conversion\n\n"
-            "Sticker Pack Management:\n"
-            "- /createstickerpack - Create new pack\n"
-            "- /addsticker - Add to existing pack\n"
-            "- /kang - Save others' stickers\n\n"
-            "Text to Sticker:\n"
-            "- /quote2sticker - Reply to any message\n\n"
-            "Need more help? Feel free to ask!"
-        )
-        await update.message.reply_text(help_text)
-
-    async def handle_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Universal handler for photos, videos, GIFs, and stickers
-        message = update.message
-        user_id = message.from_user.id
+        self.max_text_length = 200
         
-        # Store the media in user state
-        if message.photo:
-            self.user_states[user_id] = {
-                'last_media': {
-                    'type': 'photo',
-                    'file_id': message.photo[-1].file_id
-                }
-            }
-            await self.stickerify(update, context)
-        elif message.sticker:
-            self.user_states[user_id] = {
-                'last_media': {
-                    'type': 'sticker',
-                    'file_id': message.sticker.file_id,
-                    'is_animated': message.sticker.is_animated,
-                    'is_video': message.sticker.is_video
-                }
-            }
-            await self.handle_sticker(update, context)
-        elif message.animation:
-            self.user_states[user_id] = {
-                'last_media': {
-                    'type': 'animation',
-                    'file_id': message.animation.file_id
-                }
-            }
-            await self.handle_animation(update, context)
-        elif message.video:
-            self.user_states[user_id] = {
-                'last_media': {
-                    'type': 'video',
-                    'file_id': message.video.file_id
-                }
-            }
-            await self.handle_animation(update, context)
-        elif message.document:
-            mime_type = message.document.mime_type
-            self.user_states[user_id] = {
-                'last_media': {
-                    'type': 'document',
-                    'file_id': message.document.file_id,
-                    'mime_type': mime_type
-                }
-            }
-            if mime_type in self.supported_image_types:
-                await self.stickerify(update, context)
-            elif mime_type in self.supported_animation_types:
-                await self.handle_animation(update, context)
-
-    async def get_last_media(self, user_id: int, message: Message, required_type: str = None) -> dict:
-        # Get media from reply or last used media
-        if message.reply_to_message:
-            reply = message.reply_to_message
-            if reply.photo:
-                return {'type': 'photo', 'file_id': reply.photo[-1].file_id}
-            elif reply.sticker:
-                return {
-                    'type': 'sticker',
-                    'file_id': reply.sticker.file_id,
-                    'is_animated': reply.sticker.is_animated,
-                    'is_video': reply.sticker.is_video
-                }
-            elif reply.animation:
-                return {'type': 'animation', 'file_id': reply.animation.file_id}
-            elif reply.video:
-                return {'type': 'video', 'file_id': reply.video.file_id}
-            elif reply.document:
-                return {
-                    'type': 'document',
-                    'file_id': reply.document.file_id,
-                    'mime_type': reply.document.mime_type
-                }
+        # State management
+        self.user_states: Dict[int, Dict[str, Any]] = {}
+        self.cleanup_interval = 3600  # Clean up user states older than 1 hour
         
-        # If no reply, check last used media
-        if user_id in self.user_states and 'last_media' in self.user_states[user_id]:
-            last_media = self.user_states[user_id]['last_media']
-            if required_type is None or last_media['type'] == required_type:
-                return last_media
+        # Font configuration
+        self.font_size = 40
+        self.font = self._initialize_font()
         
-        return None
-
-    async def stickerify(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Convert image to sticker format
-        message = update.message
-        user_id = message.from_user.id
+        # Sticker pack configuration
+        self.max_stickers_per_pack = 120
+        self.default_emoji = "🎨"
+    
+    def _initialize_font(self) -> ImageFont.FreeTypeFont:
+        """Initialize the font for text stickers with fallbacks."""
+        font_paths = [
+            "arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/System/Library/Fonts/Arial.ttf",  # macOS
+            "C:\\Windows\\Fonts\\arial.ttf",    # Windows
+        ]
         
-        # Get media from message, reply, or last used
-        media = None
-        if message.photo:
-            media = {'type': 'photo', 'file_id': message.photo[-1].file_id}
-        else:
-            media = await self.get_last_media(user_id, message, 'photo')
-        
-        if not media:
-            await message.reply_text(
-                "To create a sticker, you can:\n"
-                "1. Send a photo directly\n"
-                "2. Reply to a photo with /stickerify\n"
-                "3. Use /stickerify right after sending a photo"
-            )
-            return
-
-        # Process the image
-        file = await context.bot.get_file(media['file_id'])
-        photo_bytes = await file.download_as_bytearray()
-        
-        with Image.open(BytesIO(photo_bytes)) as img:
-            if img.mode != 'RGBA':
-                img = img.convert('RGBA')
-            
-            img.thumbnail(self.max_sticker_size)
-            
-            output = BytesIO()
-            img.save(output, format='WebP')
-            output.seek(0)
-            
-            await message.reply_document(
-                document=output,
-                filename='sticker.webp',
-                caption="Here's your sticker! Use /addsticker to add it to a pack."
-            )
-
-    async def add_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Add text to image with customization options
-        message = update.message
-        
-        if not context.args:
-            await message.reply_text(
-                "Please use this format:\n"
-                "1. Send an image\n"
-                "2. Send: /addtext Your Text Here"
-            )
-            return
-            
-        # Check if it's a reply or direct image
-        if message.photo:
-            photo = message.photo[-1]
-        elif message.reply_to_message and message.reply_to_message.photo:
-            photo = message.reply_to_message.photo[-1]
-        else:
-            await message.reply_text(
-                "Please send an image with /addtext Your Text\n"
-                "Or reply to an image with /addtext Your Text"
-            )
-            return
-
-        text = ' '.join(context.args)
-        
-        # Process image
-        photo_file = await context.bot.get_file(photo.file_id)
-        photo_bytes = await photo_file.download_as_bytearray()
-        
-        with Image.open(BytesIO(photo_bytes)) as img:
-            if img.mode != 'RGBA':
-                img = img.convert('RGBA')
-            
-            draw = ImageDraw.Draw(img)
-            
-            font_size = int(img.width * 0.1)
+        for font_path in font_paths:
             try:
-                font = ImageFont.truetype("arial.ttf", font_size)
-            except:
-                font = ImageFont.load_default()
-
-            text_bbox = draw.textbbox((0, 0), text, font=font)
-            text_width = text_bbox[2] - text_bbox[0]
-            text_height = text_bbox[3] - text_bbox[1]
-            
-            x = (img.width - text_width) // 2
-            y = (img.height - text_height) // 2
-            
-            outline_color = 'black'
-            text_color = 'white'
-            outline_width = 2
-            
-            for adj in range(-outline_width, outline_width+1):
-                for adj2 in range(-outline_width, outline_width+1):
-                    draw.text((x+adj, y+adj2), text, font=font, fill=outline_color)
-            
-            draw.text((x, y), text, font=font, fill=text_color)
-            
-            output = BytesIO()
-            img.save(output, format='WebP')
-            output.seek(0)
-            
-            await message.reply_document(
-                document=output,
-                filename='text_sticker.webp',
-                caption="Here's your sticker with text!"
-            )
-
-    async def handle_animation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Handle GIFs and videos
-        message = update.message
+                return ImageFont.truetype(font_path, self.font_size)
+            except OSError:
+                continue
         
-        # Get the file
-        if message.animation:
-            file_id = message.animation.file_id
-        elif message.video:
-            file_id = message.video.file_id
-        else:
-            file_id = message.document.file_id
+        logger.warning("No TrueType fonts found, using default font")
+        return ImageFont.load_default()
+    
+    def _clean_old_states(self) -> None:
+        """Clean up old user states to prevent memory leaks."""
+        current_time = datetime.utcnow()
+        to_remove = []
         
-        await message.reply_text("Converting to animated sticker... Please wait.")
+        for user_id, state in self.user_states.items():
+            last_update = datetime.fromisoformat(state.get('last_update', ''))
+            if (current_time - last_update).total_seconds() > self.cleanup_interval:
+                to_remove.append(user_id)
+        
+        for user_id in to_remove:
+            del self.user_states[user_id]
+    
+    async def handle_error(self, update: Update, error: Exception) -> None:
+        """Global error handler for all bot operations."""
+        user_id = update.effective_user.id if update and update.effective_user else "Unknown"
+        
+        # Log the error with context
+        error_context = {
+            'user_id': user_id,
+            'update_id': update.update_id if update else None,
+            'chat_id': update.effective_chat.id if update and update.effective_chat else None,
+            'error_type': type(error).__name__,
+            'error_message': str(error)
+        }
+        logger.error(f"Error occurred: {error_context}", exc_info=True)
+        
+        # Prepare user-friendly error message
+        error_message = "An error occurred while processing your request."
+        
+        if isinstance(error, TelegramError):
+            if "file is too big" in str(error).lower():
+                error_message = f"The file is too large. Maximum size is {self.max_file_size // (1024 * 1024)}MB."
+            elif "wrong file type" in str(error).lower():
+                error_message = "This file type is not supported."
+            elif "STICKERSET_INVALID" in str(error):
+                error_message = "Failed to create sticker pack. Please try again or contact support."
+        elif isinstance(error, UnidentifiedImageError):
+            error_message = "Failed to process the image. Please make sure it's a valid image file."
+        elif isinstance(error, OSError):
+            error_message = "Failed to process the file. Please try again with a different file."
         
         try:
-            # Download file
-            file = await context.bot.get_file(file_id)
-            
-            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
-                await file.download_to_drive(temp_file.name)
-                temp_files.append(temp_file.name)
-                
-                # Convert to WebM
-                clip = VideoFileClip(temp_file.name)
-                
-                # Ensure it meets Telegram's requirements
-                if clip.duration > 3:
-                    clip = clip.subclip(0, 3)
-                
-                # Resize if needed while maintaining aspect ratio
-                if clip.size[0] > 512 or clip.size[1] > 512:
-                    if clip.size[1] > clip.size[0]:
-                        clip = clip.resize(height=512)
-                        if clip.size[0] > 512:
-                            clip = clip.resize(width=512)
-                    else:
-                        clip = clip.resize(width=512)
-                        if clip.size[1] > 512:
-                            clip = clip.resize(height=512)
-                
-                output_path = temp_file.name.replace('.mp4', '.webm')
-                clip.write_videofile(output_path, codec='libvpx-vp9', audio=False)
-                clip.close()
-                
-                # Send the sticker
-                with open(output_path, 'rb') as webm_file:
-                    await message.reply_document(
-                        document=webm_file,
-                        filename='animated_sticker.webm',
-                        caption=(
-                            "Here's your animated sticker!\n"
-                            "Use /addsticker to add it to your pack or /createstickerpack to create a new pack."
-                        )
-                    )
-                
-                # Cleanup
-                os.unlink(output_path)
-                os.unlink(temp_file.name)
-                temp_files.remove(temp_file.name)
-        
+            if update and update.effective_message:
+                await update.effective_message.reply_text(
+                    f"❌ {error_message}\n\nIf this issue persists, please contact support."
+                )
         except Exception as e:
-            await message.reply_text(f"Sorry, couldn't convert the animation: {str(e)}")
+            logger.error(f"Failed to send error message: {str(e)}")
 
-    async def handle_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Handle incoming stickers
-        message = update.message
-        sticker = message.sticker
-        
-        # Save the sticker information in user state
-        user_id = message.from_user.id
+    def store_media_state(self, user_id: int, media_info: MediaInfo) -> None:
+        """Store media information in user state with timestamp."""
         self.user_states[user_id] = {
-            'last_sticker': sticker
+            'last_media': media_info.to_dict(),
+            'last_update': datetime.utcnow().isoformat()
         }
-        
-        # Different messages based on sticker type
-        if sticker.is_animated:
-            sticker_type = "animated sticker"
-        elif sticker.is_video:
-            sticker_type = "video sticker"
-        else:
-            sticker_type = "sticker"
+
+    async def handle_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Universal handler for all media types."""
+        try:
+            message = update.message
+            user_id = message.from_user.id
             
-        await message.reply_text(
-            f"Nice {sticker_type}! You can:\n"
-            "1. Use /kang to add it to your pack\n"
-            "2. Use /createstickerpack to create a new pack\n"
-            "3. Send me any other media (photo, GIF, video) to create more stickers!"
-        )
-
-    async def create_meme(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Create a meme with top and bottom text
-        user_id = update.effective_user.id
-        user_states[user_id] = {
-            'waiting_for': 'top_text',
-            'photo': None
-        }
-        
-        await update.message.reply_text("Please send the image you want to make into a meme.")
-
-    async def handle_meme_state(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Handle meme creation state machine
-        user_id = update.effective_user.id
-        state = user_states.get(user_id, {})
-        
-        if state.get('waiting_for') == 'top_text':
-            if update.message.photo:
-                state['photo'] = update.message.photo[-1].file_id
-                state['waiting_for'] = 'bottom_text'
-                await update.message.reply_text("Great! Now send me the top text for your meme.")
-            else:
-                await update.message.reply_text("Please send an image first.")
+            # Clean up old states periodically
+            self._clean_old_states()
+            
+            media_info = None
+            if message.photo:
+                media_info = MediaInfo(
+                    type='photo',
+                    file_id=message.photo[-1].file_id,
+                    width=message.photo[-1].width,
+                    height=message.photo[-1].height,
+                    file_size=message.photo[-1].file_size
+                )
+                await self.stickerify(update, context)
+            elif message.sticker:
+                media_info = MediaInfo(
+                    type='sticker',
+                    file_id=message.sticker.file_id,
+                    is_animated=message.sticker.is_animated,
+                    is_video=message.sticker.is_video,
+                    width=message.sticker.width,
+                    height=message.sticker.height,
+                    file_size=message.sticker.file_size
+                )
+                await self.handle_sticker(update, context)
+            elif message.animation:
+                media_info = MediaInfo(
+                    type='animation',
+                    file_id=message.animation.file_id,
+                    width=message.animation.width,
+                    height=message.animation.height,
+                    file_size=message.animation.file_size
+                )
+                await self.handle_animation(update, context)
+            elif message.video:
+                if message.video.file_size > self.max_file_size:
+                    raise ValueError(f"Video file too large (max {self.max_file_size // (1024 * 1024)}MB)")
                 
-        elif state.get('waiting_for') == 'bottom_text':
-            state['top_text'] = update.message.text
-            state['waiting_for'] = 'processing'
-            await update.message.reply_text("Perfect! Now send me the bottom text.")
-            
-        elif state.get('waiting_for') == 'processing':
-            await self.generate_meme(
-                update,
-                context,
-                state['photo'],
-                state['top_text'],
-                update.message.text
-            )
-            del user_states[user_id]
-
-    async def generate_meme(self, update: Update, context: ContextTypes.DEFAULT_TYPE, photo_id: str, top_text: str, bottom_text: str):
-        # Generate meme from image and texts
-        photo_file = await context.bot.get_file(photo_id)
-        photo_bytes = await photo_file.download_as_bytearray()
-        
-        with Image.open(BytesIO(photo_bytes)) as img:
-            if img.mode != 'RGBA':
-                img = img.convert('RGBA')
-            
-            draw = ImageDraw.Draw(img)
-            
-            # Calculate font size based on image size
-            font_size = int(img.width * 0.15)  # Larger font for memes
-            try:
-                font = ImageFont.truetype("impact.ttf", font_size)
-            except:
-                try:
-                    font = ImageFont.truetype("arial.ttf", font_size)
-                except:
-                    font = ImageFont.load_default()
-
-            # Add top text
-            top_text = top_text.upper()
-            text_bbox = draw.textbbox((0, 0), top_text, font=font)
-            text_width = text_bbox[2] - text_bbox[0]
-            x = (img.width - text_width) // 2
-            y = 10
-            
-            # Draw outline
-            outline_color = 'black'
-            text_color = 'white'
-            outline_width = 3
-            
-            for adj in range(-outline_width, outline_width+1):
-                for adj2 in range(-outline_width, outline_width+1):
-                    draw.text((x+adj, y+adj2), top_text, font=font, fill=outline_color)
-            draw.text((x, y), top_text, font=font, fill=text_color)
-
-            # Add bottom text
-            bottom_text = bottom_text.upper()
-            text_bbox = draw.textbbox((0, 0), bottom_text, font=font)
-            text_width = text_bbox[2] - text_bbox[0]
-            text_height = text_bbox[3] - text_bbox[1]
-            x = (img.width - text_width) // 2
-            y = img.height - text_height - 10
-            
-            for adj in range(-outline_width, outline_width+1):
-                for adj2 in range(-outline_width, outline_width+1):
-                    draw.text((x+adj, y+adj2), bottom_text, font=font, fill=outline_color)
-            draw.text((x, y), bottom_text, font=font, fill=text_color)
-            
-            # Save as WebP
-            output = BytesIO()
-            img.save(output, format='WebP')
-            output.seek(0)
-            
-            await update.message.reply_document(
-                document=output,
-                filename='meme.webp',
-                caption="Here's your meme sticker!"
-            )
-
-    async def gif_to_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Convert GIF to animated sticker
-        if not update.message.reply_to_message or not (
-            update.message.reply_to_message.animation or 
-            update.message.reply_to_message.video
-        ):
-            await update.message.reply_text("Please reply to a GIF or video with /gif2sticker")
-            return
-
-        # Get the file
-        message = update.message.reply_to_message
-        file_id = message.animation.file_id if message.animation else message.video.file_id
-        
-        # Download file
-        file = await context.bot.get_file(file_id)
-        
-        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
-            await file.download_to_drive(temp_file.name)
-            temp_files.append(temp_file.name)
-            
-            # Convert to WebM
-            clip = VideoFileClip(temp_file.name)
-            
-            # Ensure it meets Telegram's requirements
-            if clip.duration > 3:
-                clip = clip.subclip(0, 3)
-            
-            # Resize if needed
-            if clip.size[0] > 512 or clip.size[1] > 512:
-                clip = clip.resize(height=512) if clip.size[1] > clip.size[0] else clip.resize(width=512)
-            
-            output_path = temp_file.name.replace('.mp4', '.webm')
-            clip.write_videofile(output_path, codec='libvpx-vp9', audio=False)
-            clip.close()
-            
-            # Send the sticker
-            with open(output_path, 'rb') as webm_file:
-                await update.message.reply_document(
-                    document=webm_file,
-                    filename='animated_sticker.webm',
-                    caption="Here's your animated sticker!"
+                media_info = MediaInfo(
+                    type='video',
+                    file_id=message.video.file_id,
+                    width=message.video.width,
+                    height=message.video.height,
+                    file_size=message.video.file_size
                 )
-            
-            # Cleanup
-            os.unlink(output_path)
-            os.unlink(temp_file.name)
-            temp_files.remove(temp_file.name)
-
-    async def create_sticker_pack(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Create a new sticker pack
-        message = update.message
-        user_id = message.from_user.id
-        
-        if not context.args:
-            await message.reply_text(
-                "Please provide a name for your sticker pack:\n"
-                "/createstickerpack <pack_name>\n\n"
-                "The bot supports:\n"
-                "- Static stickers (from photos)\n"
-                "- Animated stickers (from GIFs/videos)\n"
-                "- Video stickers (from videos)"
-            )
-            return
-        
-        pack_name = f"{context.args[0]}_{user_id}_by_{context.bot.username}"
-        pack_title = ' '.join(context.args)
-        
-        try:
-            # Check if user has a sticker ready
-            if user_id in self.user_states and 'last_sticker' in self.user_states[user_id]:
-                sticker = self.user_states[user_id]['last_sticker']
-                sticker_format = (
-                    'animated' if sticker.is_animated else 
-                    'video' if sticker.is_video else 
-                    'static'
+                await self.handle_animation(update, context)
+            elif message.document:
+                if message.document.file_size > self.max_file_size:
+                    raise ValueError(f"File too large (max {self.max_file_size // (1024 * 1024)}MB)")
+                
+                mime_type = message.document.mime_type
+                media_info = MediaInfo(
+                    type='document',
+                    file_id=message.document.file_id,
+                    mime_type=mime_type,
+                    file_size=message.document.file_size
                 )
-            else:
-                sticker_format = 'static'  # Default to static if no sticker is ready
+                
+                if mime_type in self.supported_image_types:
+                    await self.stickerify(update, context)
+                elif mime_type in self.supported_animation_types:
+                    await self.handle_animation(update, context)
+                else:
+                    await message.reply_text(
+                        "Unsupported file type. Please send an image, GIF, or video."
+                    )
+                    return
             
-            await context.bot.create_new_sticker_set(
-                user_id,
-                pack_name,
-                pack_title,
-                stickers=[],
-                sticker_format=sticker_format
-            )
-            
-            await message.reply_text(
-                f"Sticker pack created successfully!\n"
-                f"Pack name: {pack_name}\n\n"
-                f"Now you can:\n"
-                f"1. Send me any sticker to add with /kang\n"
-                f"2. Send photos for static stickers\n"
-                f"3. Send GIFs/videos for animated stickers"
-            )
-            
+            if media_info:
+                self.store_media_state(user_id, media_info)
+        
+        except ValueError as ve:
+            await message.reply_text(str(ve))
         except Exception as e:
-            await message.reply_text(f"Failed to create sticker pack: {str(e)}")
+            await self.handle_error(update, e)
 
-    async def add_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Add a sticker to an existing pack"""
-        if not update.message.reply_to_message or not (
-            update.message.reply_to_message.photo or
-            update.message.reply_to_message.document
-        ):
-            await update.message.reply_text(
-                "Please reply to an image or sticker with /addsticker"
-            )
-            return
-        
-        user = update.effective_user
-        
-        # Get user's sticker packs
+    async def get_last_media(
+        self,
+        user_id: int,
+        message: Message,
+        required_type: Optional[str] = None
+    ) -> Optional[MediaInfo]:
+        """Get media from reply or last used media with validation."""
         try:
-            user_packs = await context.bot.get_user_sticker_sets(user.id)
+            # Check reply message first
+            if message.reply_to_message:
+                reply = message.reply_to_message
+                if reply.photo:
+                    return MediaInfo(
+                        type='photo',
+                        file_id=reply.photo[-1].file_id,
+                        width=reply.photo[-1].width,
+                        height=reply.photo[-1].height,
+                        file_size=reply.photo[-1].file_size
+                    )
+                elif reply.sticker:
+                    return MediaInfo(
+                        type='sticker',
+                        file_id=reply.sticker.file_id,
+                        is_animated=reply.sticker.is_animated,
+                        is_video=reply.sticker.is_video,
+                        width=reply.sticker.width,
+                        height=reply.sticker.height,
+                        file_size=reply.sticker.file_size
+                    )
+                elif reply.animation:
+                    return MediaInfo(
+                        type='animation',
+                        file_id=reply.animation.file_id,
+                        width=reply.animation.width,
+                        height=reply.animation.height,
+                        file_size=reply.animation.file_size
+                    )
+                elif reply.video:
+                    if reply.video.file_size > self.max_file_size:
+                        raise ValueError(f"Video file too large (max {self.max_file_size // (1024 * 1024)}MB)")
+                    return MediaInfo(
+                        type='video',
+                        file_id=reply.video.file_id,
+                        width=reply.video.width,
+                        height=reply.video.height,
+                        file_size=reply.video.file_size
+                    )
+                elif reply.document:
+                    if reply.document.file_size > self.max_file_size:
+                        raise ValueError(f"File too large (max {self.max_file_size // (1024 * 1024)}MB)")
+                    return MediaInfo(
+                        type='document',
+                        file_id=reply.document.file_id,
+                        mime_type=reply.document.mime_type,
+                        file_size=reply.document.file_size
+                    )
             
-            if not user_packs:
-                await update.message.reply_text(
-                    "You don't have any sticker packs. Create one first with /createstickerpack"
+            # Check last used media
+            if user_id in self.user_states and 'last_media' in self.user_states[user_id]:
+                last_media = self.user_states[user_id]['last_media']
+                if required_type is None or last_media['type'] == required_type:
+                    return MediaInfo(**last_media)
+            
+            return None
+        
+        except ValueError as ve:
+            raise ve
+        except Exception as e:
+            logger.error(f"Error getting last media: {str(e)}", exc_info=True)
+            return None
+
+    async def stickerify(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Convert image to sticker format."""
+        try:
+            message = update.message
+            user_id = message.from_user.id
+            
+            # Get media from message, reply, or last used
+            media = None
+            if message.photo:
+                media = MediaInfo(type='photo', file_id=message.photo[-1].file_id)
+            else:
+                media = await self.get_last_media(user_id, message, 'photo')
+            
+            if not media:
+                await message.reply_text(
+                    "To create a sticker, you can:\n"
+                    "1. Send a photo directly\n"
+                    "2. Reply to a photo with /stickerify\n"
+                    "3. Use /stickerify right after sending a photo"
                 )
                 return
             
-            # Create keyboard with pack options
-            keyboard = []
-            for pack in user_packs:
-                keyboard.append([InlineKeyboardButton(
-                    pack.title,
-                    callback_data=f"add_to_pack:{pack.name}"
-                )])
+            # Process the image
+            file = await context.bot.get_file(media.file_id)
+            photo_bytes = await file.download_as_bytearray()
             
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await update.message.reply_text(
-                "Choose a sticker pack to add this sticker to:",
-                reply_markup=reply_markup
-            )
-            
+            with Image.open(BytesIO(photo_bytes)) as img:
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+                
+                # Resize while maintaining aspect ratio
+                img.thumbnail(self.max_sticker_size)
+                
+                # Create output
+                output = BytesIO()
+                img.save(output, format='WebP', quality=95)
+                output.seek(0)
+                
+                await message.reply_document(
+                    document=output,
+                    filename='sticker.webp',
+                    caption="Here's your sticker! Use /addsticker to add it to a pack."
+                )
+        
         except Exception as e:
-            await update.message.reply_text(f"Error: {str(e)}")
+            await self.handle_error(update, e)
 
-    async def quote_to_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Convert text to sticker
-        message = update.message
-        
-        # Get text from reply or command args
-        text = None
-        if message.reply_to_message and message.reply_to_message.text:
-            text = message.reply_to_message.text
-        elif context.args:
-            text = ' '.join(context.args)
-        
-        if not text:
-            await message.reply_text(
-                "To create a text sticker, you can:\n"
-                "1. Reply to any message with /quote2sticker\n"
-                "2. Use: /quote2sticker Your Text Here"
-            )
-            return
-        
-        # Create image with text
-        font_size = 40
+    async def kang_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Save sticker to user's pack."""
         try:
-            font = ImageFont.truetype("arial.ttf", font_size)
-        except:
-            font = ImageFont.load_default()
-        
-        # Wrap text
-        max_width = 20
-        wrapped_text = textwrap.fill(text, width=max_width)
-        
-        # Create image
-        padding = 20
-        img = Image.new('RGBA', (512, 512), (255, 255, 255, 0))
-        draw = ImageDraw.Draw(img)
-        
-        # Calculate text size and position
-        text_bbox = draw.textbbox((0, 0), wrapped_text, font=font)
-        text_width = text_bbox[2] - text_bbox[0]
-        text_height = text_bbox[3] - text_bbox[1]
-        
-        x = (img.width - text_width) // 2
-        y = (img.height - text_height) // 2
-        
-        # Add background
-        background_color = (0, 0, 0, 128)
-        draw.rectangle([x-padding, y-padding, x+text_width+padding, y+text_height+padding],
-                      fill=background_color)
-        
-        # Draw text
-        draw.text((x, y), wrapped_text, font=font, fill='white')
-        
-        # Save and send
-        output = BytesIO()
-        img.save(output, format='WebP')
-        output.seek(0)
-        
-        await message.reply_document(
-            document=output,
-            filename='quote.webp',
-            caption="Here's your quote sticker!"
-        )
-
-    async def kang_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Save sticker to user's pack
-        message = update.message
-        user_id = message.from_user.id
-        
-        # Get sticker from message, reply, or last used
-        media = None
-        if message.sticker:
-            media = {
-                'type': 'sticker',
-                'file_id': message.sticker.file_id,
-                'is_animated': message.sticker.is_animated,
-                'is_video': message.sticker.is_video
-            }
-        else:
-            media = await self.get_last_media(user_id, message)
-        
-        if not media or media['type'] not in ['sticker', 'photo']:
-            await message.reply_text(
-                "To save a sticker to your pack, you can:\n"
-                "1. Send any sticker, then use /kang\n"
-                "2. Reply to any sticker with /kang\n"
-                "3. Send any photo, then use /kang\n"
-                "4. Reply to any photo with /kang"
-            )
-            return
-        
-        try:
+            message = update.message
+            user_id = message.from_user.id
+            
+            # Get sticker from message, reply, or last used
+            media = None
+            if message.sticker:
+                media = MediaInfo(
+                    type='sticker',
+                    file_id=message.sticker.file_id,
+                    is_animated=message.sticker.is_animated,
+                    is_video=message.sticker.is_video
+                )
+            else:
+                media = await self.get_last_media(user_id, message)
+            
+            if not media or media.type not in ['sticker', 'photo']:
+                await message.reply_text(
+                    "To save a sticker to your pack, you can:\n"
+                    "1. Send any sticker, then use /kang\n"
+                    "2. Reply to any sticker with /kang\n"
+                    "3. Send any photo, then use /kang\n"
+                    "4. Reply to any photo with /kang"
+                )
+                return
+            
             # Get or create user's sticker pack
             user_packs = await context.bot.get_user_sticker_sets(user_id)
             
             if not user_packs:
                 # Create new pack
                 pack_name = f"pack_{user_id}_by_{context.bot.username}"
-                sticker_format = 'animated' if media.get('is_animated', False) else 'video' if media.get('is_video', False) else 'static'
+                sticker_format = (
+                    'animated' if media.is_animated
+                    else 'video' if media.is_video
+                    else 'static'
+                )
                 
                 await context.bot.create_new_sticker_set(
                     user_id,
@@ -749,83 +444,247 @@ class StickerBot:
             
             # Add sticker to pack
             pack = user_packs[0]
-            file = await context.bot.get_file(media['file_id'])
+            file = await context.bot.get_file(media.file_id)
             sticker_bytes = await file.download_as_bytearray()
             
             # If it's a photo, convert to WebP
-            if media['type'] == 'photo':
+            if media.type == 'photo':
                 with Image.open(BytesIO(sticker_bytes)) as img:
                     if img.mode != 'RGBA':
                         img = img.convert('RGBA')
                     img.thumbnail(self.max_sticker_size)
                     output = BytesIO()
-                    img.save(output, format='WebP')
+                    img.save(output, format='WebP', quality=95)
                     sticker_bytes = output.getvalue()
             
             await context.bot.add_sticker_to_set(
                 user_id,
                 pack.name,
                 sticker_bytes,
-                '-'
+                '-'  # Emoji
             )
             
             await message.reply_text(
                 f"Sticker successfully added to your pack!\n"
                 f"Use /addsticker to add more stickers."
             )
-            
+        
         except Exception as e:
-            await message.reply_text(f"Failed to add sticker: {str(e)}")
+            await self.handle_error(update, e)
 
-    async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Handle errors
-        logger.error(f"Update {update} caused error {context.error}")
-        await update.message.reply_text(
-            "Sorry, an error occurred. Please try again later."
-        )
+    async def quote_to_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Convert text to sticker with proper formatting and error handling."""
+        try:
+            message = update.message
+            
+            # Get text from reply or command args
+            text = None
+            if message.reply_to_message and message.reply_to_message.text:
+                text = message.reply_to_message.text
+            elif context.args:
+                text = ' '.join(context.args)
+            
+            if not text:
+                await message.reply_text(
+                    "To create a text sticker, you can:\n"
+                    "1. Reply to any message with /quote2sticker\n"
+                    "2. Use: /quote2sticker Your Text Here"
+                )
+                return
+            
+            # Limit text length
+            if len(text) > self.max_text_length:
+                text = text[:self.max_text_length - 3] + "..."
+            
+            # Wrap text with proper width calculation
+            max_width = 20
+            wrapped_text = textwrap.fill(text, width=max_width)
+            
+            # Create image with proper size and transparency
+            img = Image.new('RGBA', (512, 512), (255, 255, 255, 0))
+            draw = ImageDraw.Draw(img)
+            
+            # Calculate text size and position
+            text_bbox = draw.textbbox((0, 0), wrapped_text, font=self.font)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+            
+            # Add padding
+            padding = 20
+            x = (img.width - text_width) // 2
+            y = (img.height - text_height) // 2
+            
+            # Draw background with rounded corners and semi-transparency
+            background_color = (0, 0, 0, 128)
+            draw.rectangle(
+                [x-padding, y-padding, x+text_width+padding, y+text_height+padding],
+                fill=background_color
+            )
+            
+            # Draw text with anti-aliasing
+            draw.text((x, y), wrapped_text, font=self.font, fill='white')
+            
+            # Optimize and save
+            output = BytesIO()
+            img.save(output, format='WebP', quality=95, method=6)
+            output.seek(0)
+            
+            await message.reply_document(
+                document=output,
+                filename='quote.webp',
+                caption="Here's your quote sticker! Use /kang to add it to your pack."
+            )
+        
+        except Exception as e:
+            await self.handle_error(update, e)
 
-def run_health_check_server():
-    # Run the FastAPI server for health checks
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+    async def handle_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle incoming stickers."""
+        try:
+            message = update.message
+            sticker = message.sticker
+            
+            # Store sticker in user state
+            user_id = message.from_user.id
+            self.store_media_state(
+                user_id,
+                MediaInfo(
+                    type='sticker',
+                    file_id=sticker.file_id,
+                    is_animated=sticker.is_animated,
+                    is_video=sticker.is_video
+                )
+            )
+            
+            # Provide information about the sticker
+            info_text = (
+                f"Sticker Info:\n"
+                f"Type: {'Animated' if sticker.is_animated else 'Video' if sticker.is_video else 'Static'}\n"
+                f"Size: {sticker.width}x{sticker.height}\n"
+                f"Emoji: {sticker.emoji or 'None'}\n"
+                f"\nUse /kang to add this sticker to your pack!"
+            )
+            await message.reply_text(info_text)
+        
+        except Exception as e:
+            await self.handle_error(update, e)
 
-def main():
-    # Start the bot and health check server
-    health_check_thread = threading.Thread(target=run_health_check_server)
-    health_check_thread.daemon = True
-    health_check_thread.start()
+    async def handle_animation(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle GIFs and videos."""
+        try:
+            message = update.message
+            animation = message.animation or message.video
+            
+            if animation.file_size > self.max_file_size:
+                await message.reply_text(
+                    f"File is too large! Maximum size is {self.max_file_size // (1024 * 1024)}MB"
+                )
+                return
+            
+            # Store animation in user state
+            user_id = message.from_user.id
+            self.store_media_state(
+                user_id,
+                MediaInfo(
+                    type='animation' if message.animation else 'video',
+                    file_id=animation.file_id
+                )
+            )
+            
+            # Provide information about the animation
+            info_text = (
+                f"Animation Info:\n"
+                f"Type: {'GIF' if message.animation else 'Video'}\n"
+                f"Size: {animation.width}x{animation.height}\n"
+                f"Duration: {animation.duration}s\n"
+                f"\nUse /kang to convert this to an animated sticker!"
+            )
+            await message.reply_text(info_text)
+        
+        except Exception as e:
+            await self.handle_error(update, e)
 
-    # Create application and bot instance
-    application = Application.builder().token(BOT_TOKEN).build()
-    bot = StickerBot()
-    
-    # Add command handlers
-    application.add_handler(CommandHandler('start', bot.start_command))
-    application.add_handler(CommandHandler('help', bot.help_command))
-    application.add_handler(CommandHandler('stickerify', bot.stickerify))
-    application.add_handler(CommandHandler('addtext', bot.add_text))
-    application.add_handler(CommandHandler('meme', bot.create_meme))
-    application.add_handler(CommandHandler('gif2sticker', bot.gif_to_sticker))
-    application.add_handler(CommandHandler('createstickerpack', bot.create_sticker_pack))
-    application.add_handler(CommandHandler('addsticker', bot.add_sticker))
-    application.add_handler(CommandHandler('quote2sticker', bot.quote_to_sticker))
-    application.add_handler(CommandHandler('kang', bot.kang_sticker))
-    
-    # Add message handlers for direct interactions
-    # Handle all types of media that can be converted to stickers
-    media_filter = (
-        filters.PHOTO |  # Photos
-        filters.Sticker.ALL |  # All types of stickers
-        filters.Document.MimeType("image/gif") |  # GIF files
-        filters.Document.MimeType("video/mp4") |  # MP4 files
-        filters.VIDEO  # Videos
-    )
-    application.add_handler(MessageHandler(media_filter, bot.handle_media))
-    
-    # Add error handler
-    application.add_error_handler(bot.error_handler)
-    
-    # Start the bot
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /start command with comprehensive help message."""
+        try:
+            help_text = (
+                "Welcome to the Sticker Bot! 🎨\n\n"
+                "I can help you create and manage stickers. Here's what I can do:\n\n"
+                "📸 *Convert Photos to Stickers*\n"
+                "• Send any photo\n"
+                "• Use /stickerify with a photo\n"
+                "• Reply to a photo with /stickerify\n\n"
+                "🎬 *Convert GIFs/Videos to Animated Stickers*\n"
+                "• Send any GIF or video\n"
+                "• Maximum size: 50MB\n\n"
+                "💬 *Create Text Stickers*\n"
+                "• Use /quote2sticker Your Text\n"
+                "• Reply to any message with /quote2sticker\n\n"
+                "📦 *Manage Sticker Packs*\n"
+                "• Use /kang to add stickers to your pack\n"
+                "• Supports static, animated, and video stickers\n"
+                "• Maximum 120 stickers per pack\n\n"
+                "Try sending me a photo, GIF, or video to get started!"
+            )
+            await update.message.reply_text(help_text, parse_mode='Markdown')
+        
+        except Exception as e:
+            await self.handle_error(update, e)
+
+    def run(self) -> None:
+        """Run the bot with proper error handling and logging."""
+        try:
+            # Create application with persistence
+            application = Application.builder().token(BOT_TOKEN).build()
+            
+            # Add command handlers
+            application.add_handler(CommandHandler('start', self.start))
+            application.add_handler(CommandHandler('stickerify', self.stickerify))
+            application.add_handler(CommandHandler('kang', self.kang_sticker))
+            application.add_handler(CommandHandler('quote2sticker', self.quote_to_sticker))
+            
+            # Add media handlers with proper filters
+            application.add_handler(MessageHandler(
+                (
+                    filters.PHOTO |
+                    filters.Sticker.ALL |
+                    filters.Document.IMAGE |
+                    filters.Document.VIDEO |
+                    filters.VIDEO |
+                    filters.Animation
+                ),
+                self.handle_media
+            ))
+            
+            # Add error handler
+            application.add_error_handler(self.handle_error)
+            
+            # Start FastAPI server for health checks
+            import uvicorn
+            import asyncio
+            from concurrent.futures import ThreadPoolExecutor
+            
+            def run_fastapi():
+                uvicorn.run(app, host="0.0.0.0", port=PORT)
+            
+            # Run FastAPI in a separate thread
+            executor = ThreadPoolExecutor(max_workers=1)
+            asyncio.get_event_loop().run_in_executor(executor, run_fastapi)
+            
+            # Start the bot
+            logger.info(f"Starting bot on port {PORT}...")
+            application.run_polling(allowed_updates=Update.ALL_TYPES)
+        
+        except Exception as e:
+            logger.critical(f"Bot crashed: {str(e)}", exc_info=True)
+            raise
 
 if __name__ == '__main__':
-    main() 
+    try:
+        bot = StickerBot()
+        bot.run()
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.critical(f"Fatal error: {str(e)}", exc_info=True)
+        sys.exit(1) 
