@@ -30,6 +30,7 @@ from telegram.error import TelegramError, BadRequest
 import uvicorn
 from fastapi import FastAPI, Response, HTTPException
 from fastapi.responses import JSONResponse
+from telegram.helpers import escape_markdown
 
 # Configure logging with more detail
 logging.basicConfig(
@@ -848,11 +849,12 @@ class StickerBot:
         """Handle /start command with comprehensive help message."""
         try:
             user = update.effective_user
+            user_first_name = escape_markdown(user.first_name, version=1)
             message = update.effective_message
 
             welcome_text = (
                 f"*Welcome to Sticker Master Bot!* 🎨✨\n\n"
-                f"Hello {user.first_name}! I'm your personal sticker creation assistant.\n"
+                f"Hello {user_first_name}! I'm your personal sticker creation assistant.\n"
                 f"I can transform your media into beautiful stickers in seconds!\n\n"
             )
             
