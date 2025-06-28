@@ -848,6 +848,8 @@ class StickerBot:
         """Handle /start command with comprehensive help message."""
         try:
             user = update.effective_user
+            message = update.effective_message
+
             welcome_text = (
                 f"*Welcome to Sticker Master Bot!* 🎨✨\n\n"
                 f"Hello {user.first_name}! I'm your personal sticker creation assistant.\n"
@@ -876,7 +878,6 @@ class StickerBot:
                 "I'll guide you through the rest of the process."
             )
             
-            # Create inline keyboard with helpful buttons
             keyboard = [
                 [
                     InlineKeyboardButton("Create Photo Sticker", callback_data="help_photo"),
@@ -889,81 +890,104 @@ class StickerBot:
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            # Send welcome message with buttons
-            await update.message.reply_text(
-                welcome_text + features_text + usage_text,
-                parse_mode='Markdown',
-                reply_markup=reply_markup
-            )
+            # Use effective_message to handle both commands and callbacks
+            if query := update.callback_query:
+                await query.edit_message_text(
+                    welcome_text + features_text + usage_text,
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            else:
+                await message.reply_text(
+                    welcome_text + features_text + usage_text,
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
         
         except Exception as e:
             await self.handle_error(update, e)
 
     async def handle_button_press(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle inline button presses."""
+        """Handle inline button presses from various bot messages."""
         try:
             query = update.callback_query
-            await query.answer()  # Answer the callback query to remove loading state
+            data = query.data
             
-            if query.data == "help_photo":
+            # Answer the callback query to remove the loading state on the user's end
+            await query.answer()
+            
+            # --- Help Menu Buttons ---
+            if data == "help_photo":
                 help_text = (
                     "*📸 Creating Photo Stickers*\n\n"
                     "To create a static sticker:\n"
-                    "1. Send me any photo\n"
-                    "2. I'll automatically convert it to a sticker\n"
-                    "3. Use /kang to save it to your pack\n\n"
-                    "You can also:\n"
-                    "• Reply to any photo with /stickerify\n"
-                    "• Send a photo file directly\n\n"
-                    "💡 *Pro Tip:* For best results, send square images or I'll crop them automatically."
+                    "1. Send me any photo.\n"
+                    "2. I'll automatically convert it to a sticker.\n"
+                    "3. Use /kang to save it to your pack.\n\n"
+                    "💡 *Pro Tip:* For best results, use square images."
                 )
                 await query.edit_message_text(text=help_text, parse_mode='Markdown')
-                
-            elif query.data == "help_text":
+            
+            elif data == "help_text":
                 help_text = (
                     "*💬 Creating Text Stickers*\n\n"
                     "To create a text sticker:\n"
-                    "1. Use command: /quote2sticker Your text here\n"
-                    "2. Or reply to any message with /quote2sticker\n"
-                    "3. I'll create a beautiful text sticker\n\n"
-                    "💡 *Pro Tip:* Keep text under 200 characters for best results."
+                    "1. Use command: `/quote2sticker Your text here`\n"
+                    "2. Or reply to any message with /quote2sticker.\n\n"
+                    "💡 *Pro Tip:* Keep text short for better readability."
                 )
                 await query.edit_message_text(text=help_text, parse_mode='Markdown')
-                
-            elif query.data == "help_animated":
+
+            elif data == "help_animated":
                 help_text = (
                     "*🎬 Creating Animated Stickers*\n\n"
                     "To create an animated sticker:\n"
-                    "1. Send me any GIF or short video\n"
-                    "2. I'll convert it to Telegram's sticker format\n"
-                    "3. Use /kang to save it to your pack\n\n"
-                    "💡 *Pro Tip:* Keep animations under 3 seconds for best results."
+                    "1. Send me any GIF or short video.\n"
+                    "2. I'll convert it to the sticker format.\n"
+                    "3. Use /kang to save it to your pack.\n\n"
+                    "💡 *Pro Tip:* Keep animations under 3 seconds."
                 )
                 await query.edit_message_text(text=help_text, parse_mode='Markdown')
-                
-            elif query.data == "help_packs":
+
+            elif data == "help_packs":
                 help_text = (
                     "*📦 Managing Sticker Packs*\n\n"
                     "To manage your sticker packs:\n"
-                    "1. Create stickers using any method\n"
-                    "2. Use /kang to add them to your pack\n"
-                    "3. I'll create separate packs for different sticker types\n\n"
-                    "💡 *Pro Tip:* You can have up to 120 stickers in each pack."
+                    "1. Create stickers using any method.\n"
+                    "2. Use /kang to add them to your pack.\n"
+                    "3. I'll automatically create separate packs for different sticker types.\n\n"
+                    "💡 *Pro Tip:* You can have up to 120 stickers per pack."
                 )
                 await query.edit_message_text(text=help_text, parse_mode='Markdown')
-                
-            elif query.data == "back_to_main":
-                # Return to main menu
+            
+            elif data == "back_to_main":
+                # This will re-render the start menu by editing the current message
                 await self.start(update, context)
+
+            # --- Action Buttons ---
+            elif data.startswith("add_to_pack_"):
+                await query.message.reply_text(
+                    "To add this sticker to a pack, please reply to the message containing the sticker and use the `/kang` command."
+                )
+            
+            # --- Placeholder Buttons ---
+            else:
+                await query.answer(
+                    "This feature is coming soon!",
+                    show_alert=True
+                )
+                
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                # Ignore this error, it happens when a user clicks the same button twice
+                pass
+            else:
+                logger.error(f"BadRequest in button handler: {str(e)}", exc_info=True)
+                await self.handle_error(update, e)
                 
         except Exception as e:
             logger.error(f"Error handling button: {str(e)}", exc_info=True)
-            try:
-                await query.edit_message_text(
-                    "Sorry, something went wrong. Please try again or use /start to restart."
-                )
-            except:
-                pass
+            await self.handle_error(update, e)
 
     def run(self) -> None:
         """Run the bot with proper error handling and logging."""
