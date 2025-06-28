@@ -4,6 +4,8 @@
 # Pillow==10.1.0
 # moviepy==1.0.3
 # python-dotenv==1.0.0
+# fastapi==0.104.1
+# uvicorn==0.24.0
 
 import os
 import tempfile
@@ -13,6 +15,9 @@ from datetime import datetime
 import asyncio
 from io import BytesIO
 import textwrap
+import threading
+import uvicorn
+from fastapi import FastAPI
 
 # Environment and Telegram imports
 from dotenv import load_dotenv
@@ -40,6 +45,14 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+PORT = int(os.getenv('PORT', 8080))
+
+# Create FastAPI app for health checks
+app = FastAPI()
+
+@app.get("/")
+async def health_check():
+    return {"status": "healthy"}
 
 # Global variables for user states and temporary data
 user_states: Dict[int, dict] = {}
@@ -532,8 +545,17 @@ Need more help? Feel free to ask!
             "Sorry, an error occurred. Please try again later."
         )
 
+def run_health_check_server():
+    """Run the FastAPI server for health checks"""
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
+
 def main():
-    """Start the bot"""
+    """Start the bot and health check server"""
+    # Start health check server in a separate thread
+    health_check_thread = threading.Thread(target=run_health_check_server)
+    health_check_thread.daemon = True
+    health_check_thread.start()
+
     # Create application and bot instance
     application = Application.builder().token(BOT_TOKEN).build()
     bot = StickerBot()
