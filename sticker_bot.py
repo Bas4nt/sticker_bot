@@ -656,7 +656,6 @@ class StickerBot:
             y = (img.height - text_height) // 2
             
             # Draw background with rounded corners
-            from PIL import ImageDraw
             rect_x0 = x - padding
             rect_y0 = y - padding
             rect_x1 = x + text_width + padding
